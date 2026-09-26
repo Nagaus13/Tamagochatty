@@ -2,10 +2,28 @@
 :root{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0b0e12;color:#f6e7c1}*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;background:radial-gradient(circle at 50% 30%,#24313a 0,#0b0e12 52%)}main{width:min(92vw,430px);text-align:center;padding:24px}.shell{border:2px solid #e57628;border-radius:28px;padding:28px 20px;background:#111820;box-shadow:0 0 40px #000}.screen{aspect-ratio:1;border:2px solid #6eaba7;border-radius:20px;display:grid;place-items:center;background:linear-gradient(#071014,#101d22);overflow:hidden}.face{font-size:86px;filter:drop-shadow(0 0 12px #e57628);animation:float 2.4s ease-in-out infinite}.talking{animation:talk .22s ease-in-out infinite alternate}@keyframes float{50%{transform:translateY(-8px)}}@keyframes talk{to{transform:scale(1.08)}}h1{font-size:20px;letter-spacing:2px}.status{min-height:42px;color:#9fc9c5;margin:14px}.mic{width:92px;height:92px;border-radius:50%;border:2px solid #fdefc7;background:#e57628;color:#111;font-size:40px;box-shadow:0 0 28px #e5762866}.mic.listening{transform:scale(1.08);box-shadow:0 0 45px #e57628}.hint{font-size:12px;opacity:.65;margin-top:14px}.debug{margin-top:18px}.debug summary{font-size:12px;opacity:.65}.debug input{width:75%;padding:12px;border-radius:10px;border:1px solid #6eaba7;background:#0b0e12;color:#fff}.debug button{padding:12px;border-radius:10px;border:0;margin-left:4px}#log{font-size:12px;text-align:left;max-height:140px;overflow:auto;margin-top:10px;opacity:.8}
 </style></head><body><main><div class="shell"><h1>TAMAGOCHATTY</h1><div class="screen"><div id="face" class="face">◉‿◉</div></div><div id="status" class="status">Tocá el botón y hablame.</div><button id="mic" class="mic" aria-label="Hablar">●</button><div class="hint">VOICE FIRST · la respuesta siempre se habla</div><details class="debug"><summary>Debug de texto</summary><div><input id="text" placeholder="Escribí algo"><button id="send">Enviar</button></div><div id="log"></div></details></div></main><script>
 const statusEl=document.querySelector('#status'), mic=document.querySelector('#mic'), face=document.querySelector('#face'), log=document.querySelector('#log');
-let rec=null,busy=false;
-function speak(t){speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang='es-AR';u.rate=1.02;u.onstart=()=>face.classList.add('talking');u.onend=()=>{face.classList.remove('talking');statusEl.textContent='Te escucho.'};speechSynthesis.speak(u)}
-async function ask(message){if(!message||busy)return;busy=true;statusEl.textContent='Pensando…';log.innerHTML+=`<div>Vos: ${escapeHtml(message)}</div>`;try{const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})});const d=await r.json();if(!r.ok)throw Error(d.detail||'Error');statusEl.textContent=d.reply;log.innerHTML+=`<div>Tamago: ${escapeHtml(d.reply)}</div>`;speak(d.reply)}catch(e){statusEl.textContent='Error: '+e.message}finally{busy=false}}
+let rec=null,busy=false,audioCtx=null,currentSource=null;
+async function unlockAudio(){
+  if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  if(audioCtx.state==='suspended') await audioCtx.resume();
+}
+async function speak(t){
+  await unlockAudio();
+  if(currentSource){try{currentSource.stop()}catch(e){}}
+  statusEl.textContent='Preparando voz…';
+  const r=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
+  if(!r.ok){let d={};try{d=await r.json()}catch(e){};throw Error(d.detail||'No pude generar la voz')}
+  const buf=await r.arrayBuffer();
+  const decoded=await audioCtx.decodeAudioData(buf.slice(0));
+  const src=audioCtx.createBufferSource(); currentSource=src; src.buffer=decoded; src.connect(audioCtx.destination);
+  face.classList.add('talking'); statusEl.textContent=t;
+  src.onended=()=>{face.classList.remove('talking');currentSource=null;statusEl.textContent='Te escucho.'};
+  src.start(0);
+}
+async function ask(message){if(!message||busy)return;busy=true;statusEl.textContent='Pensando…';log.innerHTML+=`<div>Vos: ${escapeHtml(message)}</div>`;try{const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})});const d=await r.json();if(!r.ok)throw Error(d.detail||'Error');statusEl.textContent=d.reply;log.innerHTML+=`<div>Tamago: ${escapeHtml(d.reply)}</div>`;await speak(d.reply)}catch(e){face.classList.remove('talking');statusEl.textContent='Error: '+e.message}finally{busy=false}}
 function escapeHtml(s){return s.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(SR){rec=new SR();rec.lang='es-AR';rec.interimResults=false;rec.continuous=false;rec.onstart=()=>{mic.classList.add('listening');statusEl.textContent='Escuchando…'};rec.onend=()=>mic.classList.remove('listening');rec.onerror=e=>statusEl.textContent='Micrófono: '+e.error;rec.onresult=e=>ask(e.results[0][0].transcript);mic.onclick=()=>{speechSynthesis.cancel();rec.start()}}else{mic.onclick=()=>statusEl.textContent='Safari no habilitó reconocimiento de voz. Usá Debug por ahora.'}
-document.querySelector('#send').onclick=()=>{const i=document.querySelector('#text');ask(i.value);i.value=''};document.querySelector('#text').onkeydown=e=>{if(e.key==='Enter')document.querySelector('#send').click()};if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js');
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+if(SR){rec=new SR();rec.lang='es-AR';rec.interimResults=false;rec.continuous=false;rec.onstart=()=>{mic.classList.add('listening');statusEl.textContent='Escuchando…'};rec.onend=()=>mic.classList.remove('listening');rec.onerror=e=>statusEl.textContent='Micrófono: '+e.error;rec.onresult=e=>ask(e.results[0][0].transcript);mic.onclick=async()=>{await unlockAudio();if(currentSource){try{currentSource.stop()}catch(e){}}rec.start()}}else{mic.onclick=async()=>{await unlockAudio();statusEl.textContent='Safari no habilitó reconocimiento de voz. Usá Debug por ahora.'}}
+document.querySelector('#send').onclick=async()=>{await unlockAudio();const i=document.querySelector('#text');ask(i.value);i.value=''};document.querySelector('#text').onkeydown=e=>{if(e.key==='Enter')document.querySelector('#send').click()};
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').then(r=>r.update());
 </script></body></html>

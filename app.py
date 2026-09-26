@@ -2,7 +2,7 @@ import json, os, sqlite3, urllib.request, urllib.error
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 ROOT=Path(__file__).parent
@@ -30,6 +30,7 @@ def recent(n=10):
 SYSTEM='''Sos TamagoChatty, un compañero virtual voice-first. Hablás en español rioplatense, natural, cálido y conciso. Tu respuesta será leída en voz alta: evitá markdown, URLs largas, listas innecesarias y símbolos difíciles de pronunciar. Tenés memoria resumida y conversaciones recientes como contexto. No afirmes consciencia ni capacidades que no tenés. Si el usuario corrige un recuerdo, la corrección actual manda. Respondé como conversación oral. Devolvé JSON estricto con reply y memory. memory es un resumen breve de hechos/preferencias duraderos expresados por el usuario; conservá lo útil de la memoria anterior y no inventes hechos.'''
 
 class ChatIn(BaseModel): message:str
+class TTSIn(BaseModel): text:str
 
 @app.get('/')
 def home(): return FileResponse(ROOT/'index.html')
@@ -75,3 +76,26 @@ def chat(body:ChatIn):
     c=db(); c.execute('INSERT INTO turns(user,reply) VALUES (?,?)',(msg,out['reply'])); c.commit(); c.close()
     save_setting('memory',out.get('memory',mem))
     return {'reply':out['reply']}
+
+
+@app.post('/api/tts')
+def tts(body:TTSIn):
+    text=body.text.strip()
+    if not text: raise HTTPException(400,'Texto vacío')
+    if not KEY: raise HTTPException(500,'Falta OPENAI_API_KEY en el servidor')
+    payload={
+        'model':'gpt-4o-mini-tts',
+        'voice':'marin',
+        'input':text,
+        'instructions':'Hablá en español rioplatense de Argentina. Voz cálida, joven-adulta, natural y conversacional. Ritmo ágil, sin tono de locutor ni de asistente robótico.',
+        'response_format':'mp3'
+    }
+    req=urllib.request.Request('https://api.openai.com/v1/audio/speech',data=json.dumps(payload).encode(),headers={'Authorization':'Bearer '+KEY,'Content-Type':'application/json'},method='POST')
+    try:
+        with urllib.request.urlopen(req,timeout=90) as r: audio=r.read()
+    except urllib.error.HTTPError as e:
+        detail=e.read().decode(errors='ignore')[:300]
+        raise HTTPException(502,f'TTS respondió {e.code}: {detail}')
+    except Exception:
+        raise HTTPException(502,'No pude generar la voz')
+    return Response(content=audio,media_type='audio/mpeg',headers={'Cache-Control':'no-store'})
