@@ -3,7 +3,6 @@ from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 ROOT=Path(__file__).parent
@@ -12,7 +11,6 @@ MODEL=os.environ.get('OPENAI_MODEL','gpt-5.6')
 KEY=os.environ.get('OPENAI_API_KEY','')
 
 app=FastAPI(title='TamagoChatty Mobile')
-app.mount('/static',StaticFiles(directory=ROOT/'static'),name='static')
 
 def db():
     c=sqlite3.connect(DB)
@@ -34,7 +32,16 @@ SYSTEM='''Sos TamagoChatty, un compañero virtual voice-first. Hablás en españ
 class ChatIn(BaseModel): message:str
 
 @app.get('/')
-def home(): return FileResponse(ROOT/'static'/'index.html')
+def home(): return FileResponse(ROOT/'index.html')
+
+@app.get('/manifest.webmanifest')
+def manifest(): return FileResponse(ROOT/'manifest.webmanifest', media_type='application/manifest+json')
+
+@app.get('/icon.svg')
+def icon(): return FileResponse(ROOT/'icon.svg', media_type='image/svg+xml')
+
+@app.get('/sw.js')
+def service_worker(): return FileResponse(ROOT/'sw.js', media_type='application/javascript')
 
 @app.get('/api/status')
 def status(): return {'ok':True,'model':MODEL,'has_key':bool(KEY)}
